@@ -223,27 +223,31 @@ class Grammar:
 
         return max(list(map(dist, self.all_nodes)))
 
+    def dfs(self, sym, visited, recStack):
+        visited.add(sym)
+        recStack.add(sym)
+
+        if sym in self.alternatives:
+            for prod in self.alternatives[sym]:
+                if prod not in visited and self.dfs(prod, visited, recStack):
+                    return True
+                elif prod in recStack:
+                    return True
+
+        recStack.remove(sym)
+        return False
+
+    def is_recursive(self, sym):
+        visited = set()
+        recStack = set()
+        return self.dfs(sym, visited, recStack)
+
     def preprocess(self) -> None:
         """Computes distanceToTerminal via a fixpoint algorithm."""
         (keys, _, all_sym) = self.get_all_symbols()
         for s in all_sym:
             self.distanceToTerminal[s] = 1000000
         changed = True
-
-        reachability: dict[type, set[type]] = defaultdict(lambda: set())
-
-        def process_reachability(src: type, dsts: list[type]):
-            src = strip_annotations(src)
-            ch = False
-            src_reach = reachability[src]
-            for prod in dsts:
-                prod = strip_annotations(prod)
-                reach = reachability[prod]
-                oldlen = len(reach)
-                reach.add(src)
-                reach.update(src_reach)
-                ch |= len(reach) != oldlen
-            return ch
 
         while changed:
             changed = False
@@ -259,18 +263,6 @@ class Grammar:
                                 val,
                                 int(self.expansion_depthing) + self.distanceToTerminal[prod],
                             )
-                            old = self.abstract_dist_to_t[sym][prod]
-                            if 1 < old:
-                                self.abstract_dist_to_t[sym][prod] = 1
-                                changed = True
-                            if prod in self.abstract_dist_to_t:
-                                for subprod, dist in self.abstract_dist_to_t[prod].items():
-                                    currdist = self.abstract_dist_to_t[sym][subprod]
-                                    candidate = dist + 1
-                                    if candidate < currdist:
-                                        self.abstract_dist_to_t[sym][subprod] = candidate
-                                        changed = True
-                        changed |= process_reachability(sym, prods)
                 else:
                     if is_terminal(sym, self.non_terminals):
                         if (sym == int or sym == float or sym == str) and not self.expansion_depthing:
@@ -282,20 +274,13 @@ class Grammar:
                         assert args
                         val = max(1 + self.get_distance_to_terminal(argt) for (_, argt) in args)
 
-                        changed |= process_reachability(
-                            sym,
-                            [argt for (_, argt) in args],
-                        )
-
                 if val < old_val:
                     changed = True
                     self.distanceToTerminal[sym] = val
+            for sym in all_sym:
+                if self.is_recursive(sym):  # symbol is recursive
+                    self.recursive_prods.add(sym)
 
-        for sym in all_sym:
-            if sym in reachability[sym]:  # symbol is recursive
-                self.recursive_prods.add(sym)
-            else:
-                pass
 
     def get_weights(self):
         weights = {prod: get_gengy(prod).get("weight", 1.0) for prod in self.all_nodes}
@@ -338,7 +323,7 @@ class Grammar:
             n_d_specs = get_nodes_depth_specific(r, self, max_depth)
             for key in n_d_specs.keys():
                 branching_factors[key] = (branching_factors[key] * idx + n_d_specs[key]) / (idx + 1)
-        
+
         return branching_factors
 
     def get_grammar_properties_summary(self) -> GrammarSummary:
